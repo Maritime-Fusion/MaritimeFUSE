@@ -26,7 +26,7 @@ function case_parameters(::Type{Val{:Yinsen}})
     layers[:gap_OH] = 0.43
     layers[:OH] = 0.22
 
-    layers[:gap_OH_TF] = 0.1
+    # layers[:gap_OH_TF] = 0.1 # uncomment if not bucked 
     layers[:hfs_TF] = 0.7
     layers[:hfs_gap_TF_low_temp_shield] = 0.05
     layers[:hfs_low_temp_shield] = 0.1
@@ -55,7 +55,8 @@ function case_parameters(::Type{Val{:Yinsen}})
     ini.tf.technology = :rebco 
 
     ini.tf.n_coils = 16
-    ini.tf.shape = :princeton_D # check this
+    ini.tf.shape = :princeton_D
+    ini.center_stack.bucked = true
 
     resize!(ini.ic_antenna, 1)
     ini.ic_antenna[1].power_launched = 7.5e6
@@ -67,9 +68,14 @@ function case_parameters(::Type{Val{:Yinsen}})
     ini.core_profiles.ne_value = 75e19
     ini.core_profiles.ne_shaping = 0.9 # check this 
     ini.core_profiles.zeff = 2.0
-    ini.core_profiles.bulk = :D
+    ini.core_profiles.bulk = :DT
     ini.core_profiles.impurity = :Ne
+    ini.core_profiles.helium_fraction = 0.01
     ini.core_profiles.rot_core = 0.0
+
+    ini.requirements.flattop_duration = 300.0
+    ini.requirements.coil_j_margin = 0.2
+    ini.requirements.tritium_breeding_ratio = 1.05
 
     return ini, act
 end
