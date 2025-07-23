@@ -129,7 +129,7 @@ end
 
 # Dummy functions values taken from DEMO 2017  https://iopscience.iop.org/article/10.1088/0029-5515/57/1/016011
 function electricity(::Type{Val{:cryostat}})
-    return 30e6 # We
+    return 2e6 # We
 end
 
 function electricity(::Type{Val{:tritium_handling}})
