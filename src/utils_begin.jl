@@ -298,6 +298,22 @@ function parallel_environment(cluster::String="localhost", nworkers::Integer=0, 
             error("Not running on engaging cluster")
         end
 
+    elseif cluster == "maritime"
+        gigamem_per_node = 62
+        cpus_per_node = 32
+        mem_size = 
+        if nworkers > 0
+            nodes = 1  # don't use more than 1 node
+            nprocs_max = cpus_per_node * nodes
+            nworkers = min(nworkers, nprocs_max)
+        end
+        np = nworkers + 1
+        gigamem_per_cpu = Int(ceil(memory_usage_fraction * gigamem_per_node / cpus_per_node * cpus_per_task))
+        if Distributed.nprocs() < np
+            Distributed.addprocs(np - Distributed.nprocs(); topology=:master_worker, exeflags=["--heap-size-hint=$(gigamem_per_cpu)G"])
+        end
+
+        
     elseif cluster == "localhost"
         mem_size = Int(ceil(localhost_memory() * memory_usage_fraction))
         if nworkers > 0
