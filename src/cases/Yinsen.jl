@@ -3,7 +3,7 @@
 Yinsen
 """
 
-function case_parameters(::Type{Val{:Yinsen}})
+function case_parameters(::Val{:Yinsen})
     ini = ParametersInits()
     act = ParametersActors()
 
