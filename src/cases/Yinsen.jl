@@ -31,19 +31,21 @@ function case_parameters(::Val{:Yinsen})
     layers[:hfs_TF] = 0.7
     layers[:hfs_gap_TF_low_temp_shield] = 0.05
     layers[:hfs_low_temp_shield] = 0.1
-    layers[:hfs_blanket] = 0.23
+    layers[:hfs_vessel_flibe] = 0.03
+    layers[:hfs_blanket_outer] = 0.2
     layers[:hfs_vacuum_vessel_outer] = 0.035
-    layers[:hfs_gap_water] = 0.02
+    layers[:hfs_blanket_inner] = 0.02
     layers[:hfs_vacuum_vessel_inner] = 0.015
-    layers[:hfs_wall] = 0.055
+    layers[:hfs_wall] = 0.01
 
     layers[:plasma] = 1.88
 
     layers[:lfs_wall] = 0.01
     layers[:lfs_vacuum_vessel_inner] = 0.015
-    layers[:lfs_gap_water] = 0.02
+    layers[:lfs_blanket_inner] = 0.02
     layers[:lfs_vacuum_vessel_outer] = 0.035
-    layers[:lfs_blanket] = 0.46
+    layers[:lfs_blanket_outer] = 0.43
+    layers[:lfs_vessel_flibe] = 0.03
     layers[:lfs_low_temp_shield] = 0.05
     layers[:lfs_gap_low_temp_shield_TF] = 0.09
     layers[:lfs_TF] = 0.7
@@ -54,8 +56,10 @@ function case_parameters(::Val{:Yinsen})
     ini.build.layers = layers
     ini.build.layers[:OH].coils_inside = 6
     ini.build.layers[:gap_cryostat].coils_inside = 8
-    ini.build.layers[:hfs_blanket].material = :flibe
-    ini.build.layers[:lfs_blanket].material = :flibe
+    ini.build.layers[:hfs_blanket_outer].material = :flibe
+    ini.build.layers[:lfs_blanket_outer].material = :flibe
+    ini.build.layers[:hfs_blanket_inner].material = :flibe
+    ini.build.layers[:lfs_blanket_inner].material = :flibe
 
     ini.oh.technology = :rebco
     ini.pf_active.technology = :rebco 
