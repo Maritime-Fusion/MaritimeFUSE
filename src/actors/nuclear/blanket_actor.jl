@@ -312,7 +312,10 @@ function d1_d2_d3_layers(structure::IMAS.build__structure, layers::AbstractVecto
             d1 = d1[1]
         end
     end
-    d2 = IMAS.get_build_layer(layers; type=_blanket_, fs=fs)
+    d2 = IMAS.get_build_layers(layers; type=_blanket_, fs=fs)
+    blanket_thicknesses = [d2[i].thickness for i in 1:length(d2)]
+    thickest_blanket_layer = argmax(blanket_thicknesses)
+    d2 = d2[thickest_blanket_layer]
     d3 = IMAS.get_build_layers(layers; type=_shield_, fs=fs)
     if isempty(d3)
         d3 = IMAS.get_build_layers(layers; type=_vessel_, fs=fs)
