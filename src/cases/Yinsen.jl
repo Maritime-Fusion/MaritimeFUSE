@@ -60,6 +60,10 @@ function case_parameters(::Val{:Yinsen})
     ini.build.layers[:lfs_blanket_outer].material = :flibe
     ini.build.layers[:hfs_blanket_inner].material = :flibe
     ini.build.layers[:lfs_blanket_inner].material = :flibe
+    ini.build.layers[:lfs_vacuum_vessel_outer].material = :inconel 
+    ini.build.layers[:lfs_vacuum_vessel_inner].material = :inconel 
+    ini.build.layers[:hfs_vacuum_vessel_outer].material = :inconel 
+    ini.build.layers[:hfs_vacuum_vessel_inner].material = :inconel
 
     ini.oh.technology = :rebco
     ini.pf_active.technology = :rebco 
