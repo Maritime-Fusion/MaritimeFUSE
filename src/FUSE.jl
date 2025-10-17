@@ -90,6 +90,7 @@ include(joinpath("actors", "pf", "pf_active_actor.jl"))
 include(joinpath("actors", "pf", "pf_design_actor.jl"))
 include(joinpath("actors", "pf", "pf_passive_actor.jl"))
 include(joinpath("actors", "pf", "pf_plots.jl"))
+include(joinpath("actors", "pf", "pf_tape_calculator_actor.jl"))
 
 include(joinpath("actors", "build", "oh_magnet.jl"))
 include(joinpath("actors", "build", "tf_magnet.jl"))
