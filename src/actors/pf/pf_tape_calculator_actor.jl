@@ -5,14 +5,22 @@
     # REBCO tape specifications
     tape_width::Entry{Float64} = Entry{Float64}("m", "Width of REBCO tape"; default=0.004)  # 4mm typical
     tape_thickness::Entry{Float64} = Entry{Float64}("m", "Thickness of REBCO tape"; default=0.0001)  # 0.1mm typical
-    tape_cost_per_kAm::Entry{Float64} = Entry{Float64}("\$/kA⋅m", "Cost of REBCO tape"; default=10.0)  # Need to fill from vendor data
+    tape_cost_per_kAm::Entry{Float64} = Entry{Float64}("\$/kA⋅m", "Cost of REBCO tape"; default=10.0)
     safety_margin::Entry{Float64} = Entry{Float64}("-", "Safety margin factor (operate at Ic/margin)"; default=1.5)
     
+    # Conductor specifications (assembled from multiple tapes)
+    conductor_critical_current_low_field::Entry{Float64} = Entry{Float64}("A", "Conductor Ic at low field (<5T)"; default=45e3)  # 45 kA
+    conductor_critical_current_mid_field::Entry{Float64} = Entry{Float64}("A", "Conductor Ic at mid field (5-10T)"; default=40e3)  # 40 kA
+    conductor_critical_current_high_field::Entry{Float64} = Entry{Float64}("A", "Conductor Ic at high field (>10T)"; default=35e3)  # 35 kA
+    
     # Material properties
-    temperature::Entry{Float64} = Entry{Float64}("K", "Operating temperature for critical current calculation"; default=20.0)  # Typical for fusion magnets
+    temperature::Entry{Float64} = Entry{Float64}("K", "Operating temperature for critical current calculation"; default=20.0)
+    
+    # Conductor structure
+    conductor_structure_factor::Entry{Float64} = Entry{Float64}("-", "Multiplier for conductor thickness (accounts for insulation, structure)"; default=1.3)
+    turn_insulation_thickness::Entry{Float64} = Entry{Float64}("m", "Additional insulation between turns"; default=0.001)  # 1mm
     
     # Calculation options
-    fill_radial_space::Entry{Bool} = Entry{Bool}("-", "Use all available radial space (more parallel tapes than needed)"; default=false)
     verbose::Entry{Bool} = act_common_parameters(; verbose=false)
     do_plot::Entry{Bool} = act_common_parameters(; do_plot=false)
 end
@@ -23,7 +31,7 @@ mutable struct ActorPFTapeCalculator{D,P} <: SingleAbstractActor{D,P}
     total_tape_length::Float64
     total_tape_cost::Float64
     total_kAm::Float64
-    coil_details::Vector{Dict{String,Any}}  # Store per-coil breakdown
+    coil_details::Vector{Dict{String,Any}}
 end
 
 """
@@ -32,44 +40,35 @@ end
 Calculates REBCO tape requirements for PF coils based on their geometry and current requirements.
 
 # Physics basis
-For each coil, calculates:
-- Critical current per tape based on local magnetic field using FusionMaterials
-- Number of parallel tapes needed: N_parallel = I_total / (I_c / margin)
-- Number of turns that fit vertically: N_turns = floor(height / tape_thickness)
-- Average circumference per turn: 2π × r_avg
-- Total tape length: N_parallel × N_turns × 2π × r_avg
-- Total kA⋅m: I_total × N_turns × 2π × r_avg
-- Cost: (kA⋅m) × (\$/kA⋅m)
+HTS conductors are assembled from multiple REBCO tapes stacked together:
+- Each conductor carries 20-40 kA (operating current)
+- Conductor critical current: 35-45 kA depending on magnetic field
+- Multiple tapes are stacked (typically 100-200 tapes per conductor at high field)
+- Conductors are wound in layers (radially and vertically) to fit within coil geometry
 
-# Constraints checked
-- Verifies N_parallel fits within radial build
-- Verifies N_turns fits within vertical build
-- Warns if geometry is insufficient for current requirements
+Winding arrangement:
+- Turns are wound radially in each layer
+- Multiple layers stack vertically to accommodate all required turns
+- This is similar to a "pancake" or "layer-wound" coil configuration
 
-# Key inputs (from dd.pf_active.coil[])
-- Current per coil: coil.current.data
-- Coil geometry: coil.element[].geometry (position, dimensions)
-- Maximum magnetic field: coil.b_field_max_timed.data (used for Ic calculation)
-- Material properties: dd.build.oh.technology or dd.build.pf_active.technology
+For each coil:
+1. Determine conductor operating current based on local field
+2. Calculate number of turns: N_turns = I_total / I_operating_conductor
+3. Calculate tapes per conductor based on tape Ic vs conductor Ic
+4. Determine conductor cross-section (compact rectangular stacking)
+5. Calculate how turns fit in layers (radially and vertically)
+6. Calculate total tape length: N_turns × circumference × tapes_per_conductor
+7. Calculate cost based on kA⋅m
+
+# Key inputs
+- Coil current and geometry from dd.pf_active.coil[]
+- Conductor critical currents (35-45 kA) based on field strength
+- Individual tape critical current estimates for cost calculation
 
 # Key outputs
-- Updates coil.element[].turns_with_sign with calculated N_turns
-- Stores total tape length and cost in actor fields
-- Stores detailed breakdown per coil in actor.coil_details
-- Optionally prints detailed breakdown per coil
-
-# REBCO tape parameters to specify
-- `tape_width`, `tape_thickness`: Physical dimensions
-  * Common widths: 2mm, 4mm, 6mm, 12mm
-  * Typical thickness: ~0.1mm
-- `tape_cost_per_kAm`: Current market price
-  * Typical range: \$5-20/kA⋅m depending on Ic rating and volume
-- `temperature`: Operating temperature for critical current lookup
-  * Typical: 20K for fusion magnets (vs 77K for other applications)
-
-!!! note
-    Must run after ActorPFdesign or ActorPFactive to have coil currents and fields defined.
-    Critical current is automatically calculated based on local magnetic field for each coil.
+- Updates coil.element[].turns_with_sign
+- Total tape length and cost
+- Detailed per-coil breakdown including winding configuration
 """
 function ActorPFTapeCalculator(dd::IMAS.dd, act::ParametersAllActors; kw...)
     actor = ActorPFTapeCalculator(dd, act.ActorPFTapeCalculator; kw...)
@@ -84,11 +83,6 @@ function ActorPFTapeCalculator(dd::IMAS.dd, par::FUSEparameters__ActorPFTapeCalc
     return ActorPFTapeCalculator(dd, par, 0.0, 0.0, 0.0, Dict{String,Any}[])
 end
 
-"""
-    _step(actor::ActorPFTapeCalculator)
-
-Calculates tape requirements for each PF coil and updates coil.element[].turns_with_sign
-"""
 function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
     dd = actor.dd
     par = actor.par
@@ -103,18 +97,25 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
         println("\n" * "="^80)
         println("REBCO Tape Requirements Calculation")
         println("="^80)
-        println("Tape specifications:")
+        println("Individual tape specifications:")
         println("  Width: $(par.tape_width*1000) mm")
         println("  Thickness: $(par.tape_thickness*1000) mm")
+        println("Conductor specifications:")
         println("  Operating temperature: $(par.temperature) K")
         println("  Safety margin: $(par.safety_margin)x")
+        println("  Ic at low field (<5T): $(par.conductor_critical_current_low_field/1000) kA")
+        println("  Ic at mid field (5-10T): $(par.conductor_critical_current_mid_field/1000) kA")
+        println("  Ic at high field (>10T): $(par.conductor_critical_current_high_field/1000) kA")
+        println("Winding configuration:")
+        println("  Layer-wound (pancake style) with vertical stacking")
+        println("  Turn insulation: $(par.turn_insulation_thickness*1000) mm")
         println("  Cost: \$$(par.tape_cost_per_kAm)/kA⋅m")
         println("="^80)
     end
     
     for (coil_idx, coil) in enumerate(dd.pf_active.coil)
-        # Get coil current
-        I_total = abs(@ddtime(coil.current.data))  # Total current the coil must carry
+        # Get coil current requirement
+        I_total = abs(@ddtime(coil.current.data))  # Total current the coil must carry (Amperes)
         
         if I_total == 0.0
             if par.verbose
@@ -125,76 +126,97 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
         
         # Get coil geometry
         element = coil.element[1]
-        geom = element.geometry
-        
-        # Get coil position and dimensions
-        r_coil = element.geometry.rectangle.r  # Radial position of coil center
-        z_coil = element.geometry.rectangle.z  # Vertical position of coil center
-        width_coil = element.geometry.rectangle.width  # Radial build
-        height_coil = element.geometry.rectangle.height  # Vertical build
-        
-        # Calculate average radius (for mean turn circumference)
-        r_avg = r_coil  # Center of coil is already at average radius
+        r_coil = element.geometry.rectangle.r
+        z_coil = element.geometry.rectangle.z
+        width_coil = element.geometry.rectangle.width  # Radial build available
+        height_coil = element.geometry.rectangle.height  # Vertical build available
         
         # Get magnetic field at this coil location
         B_field = abs(only(coil.b_field_max_timed.data))  # Tesla
         
-        # Get material and calculate critical current density at this field
-        if IMAS.is_ohmic_coil(coil)
-            coil_material = FusionMaterials.Material(dd.build.oh.technology)
+        # Determine conductor critical current based on field
+        I_c_conductor = if B_field > 10.0
+            par.conductor_critical_current_high_field
+        elseif B_field > 5.0
+            par.conductor_critical_current_mid_field
         else
-            coil_material = FusionMaterials.Material(dd.build.pf_active.technology)
+            par.conductor_critical_current_low_field
         end
         
-        # Critical current density in A/m²
-        J_c = coil_material.critical_current_density(; Bext=B_field, temperature=par.temperature)
+        # Operating current for the conductor (with safety margin)
+        I_operating_conductor = I_c_conductor / par.safety_margin
         
-        # Calculate critical current per tape
-        # Cross-sectional area of REBCO carrying layer (typically much thinner than total tape thickness)
-        # For simplicity, use tape_width × tape_thickness, but in reality the superconducting layer is ~1-2 microns
-        # You may want to add a parameter for the actual SC layer thickness
-        tape_cross_section = par.tape_width * par.tape_thickness  # m²
-        I_c_per_tape = J_c * tape_cross_section  # Amperes
-        I_safe_per_tape = I_c_per_tape / par.safety_margin
+        # Calculate number of turns needed
+        N_turns = ceil(Int, I_total / I_operating_conductor)
         
-        # Calculate number of turns that fit vertically (DO THIS FIRST)
-        N_turns = floor(Int, height_coil / par.tape_thickness)
+        # Estimate individual tape critical current for cost calculation
+        # These are rough estimates based on typical REBCO performance at 20K
+        I_c_per_tape = if B_field > 10.0
+            175.0  # A, conservative at 13T
+        elseif B_field > 5.0
+            250.0  # A, at mid field
+        else
+            450.0  # A, at low field where REBCO performs well
+        end
         
-        if N_turns == 0
-            @warn "Coil $(coil.name): Height too small ($(height_coil*1000) mm) for even one turn!"
+        # Calculate tapes per conductor (for cost estimation)
+        tapes_per_conductor = ceil(Int, I_c_conductor / I_c_per_tape)
+        
+        # Estimate conductor geometry
+        # Stack tapes in a roughly square cross-section for compactness
+        tapes_per_side = ceil(Int, sqrt(tapes_per_conductor))
+        
+        # Conductor bare dimensions (before insulation/structure)
+        conductor_radial_bare = tapes_per_side * par.tape_width
+        conductor_vertical_bare = tapes_per_side * par.tape_thickness
+        
+        # Add structure factor for insulation, potting, etc.
+        conductor_radial_thickness = conductor_radial_bare * par.conductor_structure_factor
+        conductor_vertical_thickness = conductor_vertical_bare * par.conductor_structure_factor
+        
+        # Add turn-to-turn insulation
+        conductor_radial_with_insulation = conductor_radial_thickness + par.turn_insulation_thickness
+        conductor_vertical_with_insulation = conductor_vertical_thickness + par.turn_insulation_thickness
+        
+        # Calculate winding arrangement - layer wound configuration
+        # Turns are wound radially, then stacked vertically in layers
+        turns_per_radial_layer = floor(Int, width_coil / conductor_radial_with_insulation)
+        
+        if turns_per_radial_layer == 0
+            @warn "Coil $(coil.name): Conductor ($(round(conductor_radial_with_insulation*1000, digits=1)) mm) too wide to fit in radial build ($(round(width_coil*1000, digits=1)) mm)!"
             continue
         end
-
-        # Now calculate current PER TURN (not total current)
-        I_per_turn = I_total / N_turns  # This is the current each turn must carry
-
-        # Calculate number of parallel tapes needed (for current per turn)
-        N_parallel_needed = ceil(Int, I_per_turn / I_safe_per_tape)
         
-        # Check if parallel tapes fit radially
-        N_parallel_max = floor(Int, width_coil / par.tape_width)
+        # Calculate number of vertical layers needed
+        n_vertical_layers = ceil(Int, N_turns / turns_per_radial_layer)
         
-        if N_parallel_needed > N_parallel_max
-            @warn "Coil $(coil.name): Need $N_parallel_needed parallel tapes but only $N_parallel_max fit in radial build ($(width_coil*1000) mm)! Consider wider tape or larger coil."
-            N_parallel = N_parallel_max  # Use what fits
-        elseif par.fill_radial_space
-            N_parallel = N_parallel_max  # Use all available space for extra margin
-        else
-            N_parallel = N_parallel_needed  # Use only what's needed
+        # Check if layers fit vertically
+        vertical_build_needed = n_vertical_layers * conductor_vertical_with_insulation
+        fits_vertically = vertical_build_needed <= height_coil
+        
+        # Radial build used (may be less than available)
+        radial_build_used = turns_per_radial_layer * conductor_radial_with_insulation
+        fits_radially = radial_build_used <= width_coil  # Should always be true by construction
+        
+        if !fits_vertically
+            @warn "Coil $(coil.name): $n_vertical_layers layers need $(round(vertical_build_needed*1000, digits=1)) mm vertically but only $(round(height_coil*1000, digits=1)) mm available!"
         end
         
         # Calculate tape length per coil
+        r_avg = r_coil
         circumference_per_turn = 2π * r_avg
-        length_per_coil = N_parallel * N_turns * circumference_per_turn
+        total_conductor_length = N_turns * circumference_per_turn
+        total_tape_length = total_conductor_length * tapes_per_conductor
         
-        # Calculate kA⋅m (cost basis)
-        kAm_per_coil = (I_total / 1000.0) * N_turns * circumference_per_turn
+        # Calculate kA⋅m (for cost calculation)
+        # This is based on the actual current × conductor length
+        kAm_per_coil = (I_total / 1000.0) * total_conductor_length
         
         # Calculate cost
         cost_per_coil = kAm_per_coil * par.tape_cost_per_kAm
         
         # Update totals
-        actor.total_tape_length += length_per_coil
+        actor.total_tape_length += total_tape_length
         actor.total_kAm += kAm_per_coil
         actor.total_tape_cost += cost_per_coil
         
@@ -205,23 +227,29 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
             "z" => z_coil,
             "width" => width_coil,
             "height" => height_coil,
-            "current" => I_total,
+            "current_requirement" => I_total,
             "B_field" => B_field,
-            "J_c" => J_c,
+            "I_c_conductor" => I_c_conductor,
+            "I_operating_conductor" => I_operating_conductor,
             "I_c_per_tape" => I_c_per_tape,
-            "N_parallel" => N_parallel,
-            "N_parallel_needed" => N_parallel_needed,
-            "N_parallel_max" => N_parallel_max,
             "N_turns" => N_turns,
+            "tapes_per_conductor" => tapes_per_conductor,
+            "conductor_radial" => conductor_radial_with_insulation,
+            "conductor_vertical" => conductor_vertical_with_insulation,
+            "turns_per_layer" => turns_per_radial_layer,
+            "n_layers" => n_vertical_layers,
+            "radial_build_used" => radial_build_used,
+            "vertical_build_needed" => vertical_build_needed,
+            "fits_radially" => fits_radially,
+            "fits_vertically" => fits_vertically,
             "circumference" => circumference_per_turn,
-            "tape_length" => length_per_coil,
+            "tape_length" => total_tape_length,
             "kAm" => kAm_per_coil,
             "cost" => cost_per_coil
         )
         push!(actor.coil_details, coil_detail)
         
         # Store number of turns in IMAS structure
-        # Use turns_with_sign to preserve polarity of current
         sign_current = sign(@ddtime(coil.current.data))
         element.turns_with_sign = sign_current * N_turns
         
@@ -231,36 +259,40 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
             println("  Dimensions: $(round(width_coil*1000, digits=1)) mm (radial) × $(round(height_coil*1000, digits=1)) mm (vertical)")
             println("  Current requirement: $(round(I_total/1000, digits=1)) kA")
             println("  Magnetic field: $(round(B_field, digits=2)) T")
-            println("  Critical current density: $(round(J_c/1e9, digits=2)) GA/m²")
-            println("  Critical current per tape: $(round(I_c_per_tape, digits=1)) A")
-            println("  Safe current per tape: $(round(I_safe_per_tape, digits=1)) A")
-            println("  Parallel tapes: $N_parallel ($(N_parallel_needed) needed, $(N_parallel_max) max)")
-            println("  Turns: $N_turns")
-            println("  Avg circumference: $(round(circumference_per_turn, digits=2)) m")
-            println("  Tape length: $(round(length_per_coil/1000, digits=2)) km")
-            println("  kA⋅m: $(round(kAm_per_coil, digits=2)) kA⋅m")
-            println("  Cost: \$$(round(cost_per_coil, digits=2))")
+            println("  Conductor Ic: $(round(I_c_conductor/1000, digits=1)) kA")
+            println("  Conductor operating current: $(round(I_operating_conductor/1000, digits=1)) kA")
+            println("  Number of turns: $N_turns")
+            println("  Tape Ic estimate: $(round(I_c_per_tape, digits=1)) A")
+            println("  Tapes per conductor: $tapes_per_conductor")
+            println("  Conductor dimensions: $(round(conductor_radial_with_insulation*1000, digits=1)) mm × $(round(conductor_vertical_with_insulation*1000, digits=1)) mm (with insulation)")
+            println("  Winding configuration:")
+            println("    - Turns per radial layer: $turns_per_radial_layer")
+            println("    - Number of vertical layers: $n_vertical_layers")
+            println("    - Radial build used: $(round(radial_build_used*1000, digits=1)) mm / $(round(width_coil*1000, digits=1)) mm")
+            println("    - Vertical build needed: $(round(vertical_build_needed*1000, digits=1)) mm / $(round(height_coil*1000, digits=1)) mm")
+            println("  Fit status:")
+            println("    - Radial: $(fits_radially ? "✓" : "✗")")
+            println("    - Vertical: $(fits_vertically ? "✓" : "✗")")
+            println("  Avg turn circumference: $(round(circumference_per_turn, digits=2)) m")
+            println("  Total tape length: $(round(total_tape_length/1000, digits=2)) km")
+            println("  kA⋅m: $(round(kAm_per_coil/1e6, digits=2)) M kA⋅m")
+            println("  Cost: \$$(round(cost_per_coil/1e6, digits=2))M")
         end
     end
     
     return actor
 end
 
-"""
-    _finalize(actor::ActorPFTapeCalculator)
-
-Prints summary of total tape requirements across all coils
-"""
 function _finalize(actor::ActorPFTapeCalculator{D,P}) where {D<:Real,P<:Real}
     par = actor.par
     
-    if par.verbose || true  # Always print summary
+    if par.verbose || true
         println("\n" * "="^80)
         println("Total REBCO Tape Requirements (All PF Coils)")
         println("="^80)
         println("  Total tape length: $(round(actor.total_tape_length/1000, digits=2)) km")
-        println("  Total kA⋅m: $(round(actor.total_kAm, digits=2)) kA⋅m")
-        println("  Total cost: \$$(round(actor.total_tape_cost, digits=2))")
+        println("  Total kA⋅m: $(round(actor.total_kAm/1e6, digits=2)) M kA⋅m")
+        println("  Total cost: \$$(round(actor.total_tape_cost/1e6, digits=2))M")
         println("="^80)
     end
     
