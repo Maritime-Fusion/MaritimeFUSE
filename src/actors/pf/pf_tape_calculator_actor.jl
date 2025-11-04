@@ -22,7 +22,6 @@
     
     # Calculation options
     verbose::Entry{Bool} = act_common_parameters(; verbose=false)
-    do_plot::Entry{Bool} = act_common_parameters(; do_plot=false)
 end
 
 mutable struct ActorPFTapeCalculator{D,P} <: SingleAbstractActor{D,P}
@@ -31,6 +30,7 @@ mutable struct ActorPFTapeCalculator{D,P} <: SingleAbstractActor{D,P}
     total_tape_length::Float64
     total_tape_cost::Float64
     total_kAm::Float64
+    cryo_requirement::Union{Float64,Missing}
     coil_details::Vector{Dict{String,Any}}
 end
 
@@ -80,7 +80,7 @@ end
 function ActorPFTapeCalculator(dd::IMAS.dd, par::FUSEparameters__ActorPFTapeCalculator; kw...)
     logging_actor_init(ActorPFTapeCalculator)
     par = OverrideParameters(par; kw...)
-    return ActorPFTapeCalculator(dd, par, 0.0, 0.0, 0.0, Dict{String,Any}[])
+    return ActorPFTapeCalculator(dd, par, 0.0, 0.0, 0.0, missing, Dict{String,Any}[])
 end
 
 function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
@@ -150,7 +150,6 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
         N_turns = ceil(Int, I_total / I_operating_conductor)
         
         # Calculate individual tape critical current for cost calculation
-
         J_c, _ = FusionMaterials.ReBCO_Jcrit(B_field, 0.0, dd.build.pf_active.technology.temperature, 0.0)
 
         tape_area = par.tape_width * par.tape_thickness # m^2 
@@ -279,6 +278,8 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
             println("  Cost: \$$(round(cost_per_coil/1e6, digits=2))M")
         end
     end
+
+    actor.cryo_requirement = cryo_requirement(dd.build.pf_active.technology.temperature)
     
     return actor
 end
@@ -293,12 +294,15 @@ function _finalize(actor::ActorPFTapeCalculator{D,P}) where {D<:Real,P<:Real}
         println("  Total tape length: $(round(actor.total_tape_length/1000, digits=2)) km")
         println("  Total kA⋅m: $(round(actor.total_kAm/1e6, digits=2)) M kA⋅m")
         println("  Total cost: \$$(round(actor.total_tape_cost/1e6, digits=2)) \$M ")
+        println("  Operating temperature: $(actor.dd.build.pf_active.technology.temperature) K")
+        println("  Cryo cooler electrical consumption: $(round(actor.cryo_requirement, digits=2)./1e6) MW ")
         println("="^80)
     end
-    
-    if par.do_plot
-        display(plot(actor))
-    end
-    
+
     return actor
+end
+
+# Assumes a linear relationship between cryocooler electrical consumption and superconductor operating temperature
+function cryo_requirement(temperature)
+    return -48e3 * temperature + 2.404e6 # returns electrical consumption in W 
 end
