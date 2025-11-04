@@ -283,14 +283,18 @@ function _step(actor::ActorFluxMatcher{D,P}) where {D<:Real,P<:Real}
             # NonlinearSolve returns the first value if the optimization was not successful
             # but we want it to return the best solution, even if the optimization did not
             # reach the desired tolerance
-            if norm(err_history[end]) == norm(err_history[1])
+            if !isempty(err_history) && length(err_history) > 1 && norm(err_history[end]) == norm(err_history[1])
                 pop!(err_history)
                 pop!(z_scaled_history)
             end
 
             # Extract the solution vector
-            k = argmin(map(norm, err_history))
-            res = (zero=z_scaled_history[k],)
+            if !isempty(err_history)
+                k = argmin(map(norm, err_history))
+                res = (zero=z_scaled_history[k],)
+            else
+                res = (zero=opt_parameters,)
+            end
         end
 
     finally
@@ -1027,6 +1031,32 @@ function check_evolve_densities(cp1d::IMAS.core_profiles__profiles_1d, evolve_de
 end
 
 """
+    evolve_densities_dict_creation(flux_match_species::Vector, fixed_species::Vector, match_ne_scale_species::Vector, replay_species::Vector; quasi_neutrality_specie::Union{Symbol,Bool}=false)
+
+Create the density_evolution dict based on input vectors: flux_match_species, fixed_species, match_ne_scale_species, replay_species, quasi_neutrality_specie
+"""
+function evolve_densities_dict_creation(
+    flux_match_species::Vector;
+    fixed_species::Vector{Symbol}=Symbol[],
+    match_ne_scale_species::Vector{Symbol}=Symbol[],
+    replay_species::Vector{Symbol}=Symbol[],
+    quasi_neutrality_specie::Union{Symbol,Bool}=false)
+
+    parse_list = vcat(
+        [[sym, :flux_match] for sym in flux_match_species],
+        [[sym, :match_ne_scale] for sym in match_ne_scale_species],
+        [[sym, :fixed] for sym in fixed_species],
+        [[sym, :replay] for sym in replay_species]
+    )
+    if typeof(quasi_neutrality_specie) <: Symbol
+        parse_list = vcat(parse_list, [[quasi_neutrality_specie, :quasi_neutrality]])
+    end
+
+    return Dict(sym => evolve for (sym, evolve) in parse_list)
+end
+
+
+"""
     setup_density_evolution_electron_flux_match_rest_ne_scale(cp1d::IMAS.core_profiles__profiles_1d)
 
 Sets up the evolve_density dict to evolve only ne and keep the rest matching the ne_scale lengths
@@ -1093,31 +1123,6 @@ function setup_density_evolution_replay(cp1d::IMAS.core_profiles__profiles_1d)
 end
 
 """
-    evolve_densities_dict_creation(flux_match_species::Vector, fixed_species::Vector, match_ne_scale_species::Vector, replay_species::Vector; quasi_neutrality_specie::Union{Symbol,Bool}=false)
-
-Create the density_evolution dict based on input vectors: flux_match_species, fixed_species, match_ne_scale_species, replay_species, quasi_neutrality_specie
-"""
-function evolve_densities_dict_creation(
-    flux_match_species::Vector;
-    fixed_species::Vector{Symbol}=Symbol[],
-    match_ne_scale_species::Vector{Symbol}=Symbol[],
-    replay_species::Vector{Symbol}=Symbol[],
-    quasi_neutrality_specie::Union{Symbol,Bool}=false)
-
-    parse_list = vcat(
-        [[sym, :flux_match] for sym in flux_match_species],
-        [[sym, :match_ne_scale] for sym in match_ne_scale_species],
-        [[sym, :fixed] for sym in fixed_species],
-        [[sym, :replay] for sym in replay_species]
-    )
-    if typeof(quasi_neutrality_specie) <: Symbol
-        parse_list = vcat(parse_list, [[quasi_neutrality_specie, :quasi_neutrality]])
-    end
-
-    return Dict(sym => evolve for (sym, evolve) in parse_list)
-end
-
-"""
     check_output_fluxes(output::Vector{<:Real}, what::String)
 
 Checks if there are any NaNs in the output
@@ -1131,10 +1136,16 @@ function cp1d_copy_primary_quantities(cp1d::IMAS.core_profiles__profiles_1d{T}) 
     to_cp1d.grid.rho_tor_norm = deepcopy(cp1d.grid.rho_tor_norm)
     to_cp1d.electrons.density_thermal = deepcopy(cp1d.electrons.density_thermal)
     to_cp1d.electrons.temperature = deepcopy(cp1d.electrons.temperature)
+    if !ismissing(cp1d.electrons, :density_fast)
+        to_cp1d.electrons.density_fast = deepcopy(cp1d.electrons.density_fast)
+    end
     resize!(to_cp1d.ion, length(cp1d.ion))
     for (initial_ion, ion) in zip(to_cp1d.ion, cp1d.ion)
         initial_ion.element = ion.element
         initial_ion.density_thermal = deepcopy(ion.density_thermal)
+        if !ismissing(ion, :density_fast)
+            initial_ion.density_fast = deepcopy(ion.density_fast)
+        end
         initial_ion.temperature = deepcopy(ion.temperature)
     end
     to_cp1d.rotation_frequency_tor_sonic = deepcopy(cp1d.rotation_frequency_tor_sonic)
@@ -1146,9 +1157,15 @@ function cp1d_copy_primary_quantities!(to_cp1d::T, cp1d::T) where {T<:IMAS.core_
     to_cp1d.grid.rho_tor_norm .= cp1d.grid.rho_tor_norm
     to_cp1d.electrons.density_thermal .= cp1d.electrons.density_thermal
     to_cp1d.electrons.temperature .= cp1d.electrons.temperature
+    if !ismissing(cp1d.electrons, :density_fast)
+        to_cp1d.electrons.density_fast .= cp1d.electrons.density_fast
+    end
     for (initial_ion, ion) in zip(to_cp1d.ion, cp1d.ion)
         initial_ion.density_thermal .= ion.density_thermal
         initial_ion.temperature .= ion.temperature
+        if !ismissing(ion, :density_fast)
+            initial_ion.density_fast .= ion.density_fast
+        end
     end
     to_cp1d.rotation_frequency_tor_sonic .= cp1d.rotation_frequency_tor_sonic
     return to_cp1d
