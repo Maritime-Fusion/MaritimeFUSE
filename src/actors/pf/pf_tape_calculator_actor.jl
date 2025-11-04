@@ -149,15 +149,12 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
         # Calculate number of turns needed
         N_turns = ceil(Int, I_total / I_operating_conductor)
         
-        # Estimate individual tape critical current for cost calculation
-        # These are rough estimates based on typical REBCO performance at 20K
-        I_c_per_tape = if B_field > 10.0
-            175.0  # A, conservative at 13T
-        elseif B_field > 5.0
-            250.0  # A, at mid field
-        else
-            450.0  # A, at low field where REBCO performs well
-        end
+        # Calculate individual tape critical current for cost calculation
+
+        J_c, _ = FusionMaterials.ReBCO_Jcrit(B_field, 0.0, dd.build.pf_active.technology.temperature, 0.0)
+
+        tape_area = par.tape_width * par.tape_thickness # m^2 
+        I_c_per_tape = J_c * tape_area 
         
         # Calculate tapes per conductor (for cost estimation)
         tapes_per_conductor = ceil(Int, I_c_conductor / I_c_per_tape)
@@ -208,16 +205,19 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
         total_conductor_length = N_turns * circumference_per_turn
         total_tape_length = total_conductor_length * tapes_per_conductor
         
-        # Calculate kA⋅m (for cost calculation)
-        # This is based on the actual current × conductor length
-        kAm_per_coil = (I_total / 1000.0) * total_conductor_length
-        
-        # Calculate cost
-        cost_per_coil = kAm_per_coil * par.tape_cost_per_kAm
+        # For cost calculation, want Ic at vendor rating conditions (77K, self-field)
+        I_c_per_tape_77K_sf = 400 # A
+
+        # Calculate kA⋅m at vendor rating conditions
+        I_c_per_tape_77K_sf_kA = I_c_per_tape_77K_sf / 1000.0  # Convert A to kA
+        kAm_per_coil_at_77K_sf = total_tape_length * I_c_per_tape_77K_sf_kA
+
+        # Calculate cost based on 77K self-field kA⋅m rating
+        cost_per_coil = kAm_per_coil_at_77K_sf * par.tape_cost_per_kAm
         
         # Update totals
         actor.total_tape_length += total_tape_length
-        actor.total_kAm += kAm_per_coil
+        actor.total_kAm += kAm_per_coil_at_77K_sf
         actor.total_tape_cost += cost_per_coil
         
         # Store detailed breakdown
@@ -244,7 +244,7 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
             "fits_vertically" => fits_vertically,
             "circumference" => circumference_per_turn,
             "tape_length" => total_tape_length,
-            "kAm" => kAm_per_coil,
+            "kAm" => kAm_per_coil_at_77K_sf,
             "cost" => cost_per_coil
         )
         push!(actor.coil_details, coil_detail)
@@ -275,7 +275,7 @@ function _step(actor::ActorPFTapeCalculator{T}) where {T<:Real}
             println("    - Vertical: $(fits_vertically ? "✓" : "✗")")
             println("  Avg turn circumference: $(round(circumference_per_turn, digits=2)) m")
             println("  Total tape length: $(round(total_tape_length/1000, digits=2)) km")
-            println("  kA⋅m: $(round(kAm_per_coil/1e6, digits=2)) M kA⋅m")
+            println("  kA⋅m: $(round(kAm_per_coil_at_77K_sf/1e6, digits=2)) M kA⋅m")
             println("  Cost: \$$(round(cost_per_coil/1e6, digits=2))M")
         end
     end
@@ -292,7 +292,7 @@ function _finalize(actor::ActorPFTapeCalculator{D,P}) where {D<:Real,P<:Real}
         println("="^80)
         println("  Total tape length: $(round(actor.total_tape_length/1000, digits=2)) km")
         println("  Total kA⋅m: $(round(actor.total_kAm/1e6, digits=2)) M kA⋅m")
-        println("  Total cost: \$$(round(actor.total_tape_cost/1e6, digits=2))M")
+        println("  Total cost: \$$(round(actor.total_tape_cost/1e6, digits=2)) \$M ")
         println("="^80)
     end
     
