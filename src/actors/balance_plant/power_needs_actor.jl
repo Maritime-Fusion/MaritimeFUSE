@@ -130,7 +130,7 @@ function electricity(::Val{:cryostat})
 end
 
 function electricity(::Val{:tritium_handling})
-    return 15e6# We
+    return 8e6# We
 end
 
 function electricity(::Val{:pf_active})
