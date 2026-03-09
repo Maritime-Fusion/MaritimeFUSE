@@ -26,6 +26,7 @@ use_cases["EXCITE"] = ([:EXCITE], Dict())
 use_cases["MANTA"] = ([:MANTA], Dict())
 use_cases["UNIT"] = ([:UNIT], Dict())
 use_cases["Yinsen"] = ([:Yinsen], Dict())
+use_cases["Yinsen_upgrade"] = ([:Yinsen], Dict())
 
 """
     case_parameters(case::Symbol, args...; kw...)
