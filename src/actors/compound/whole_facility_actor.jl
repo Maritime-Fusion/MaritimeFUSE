@@ -162,7 +162,8 @@ function _step(actor::ActorWholeFacility)
         actor.Neutronics = ActorNeutronics(dd, act)
 
         # ActorBlanket optimizes the radial build thickness of the first wall, blanket, shield and Li6 enrichment to achieve a target TBR
-        actor.Blanket = ActorBlanket(dd, act)
+        # actor.Blanket = ActorBlanket(dd, act)
+        @warn "Skipping ActorBlanket - blanket thickness will not be rescaled"
         # We must re-generate the CX build since we updated the radial build
         actor.CXbuild = ActorCXbuild(dd, act)
 
